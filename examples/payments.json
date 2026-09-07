@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "title": "One run across five repos: routes, users, the merge, and what fell out of it.",
+  "repos": [
+    { "id": "web", "remote": "acme/web" },
+    { "id": "be", "remote": "acme/backend" },
+    { "id": "rn", "label": "mobile", "remote": "acme/mobile" },
+    { "id": "admin", "remote": "acme/admin" },
+    { "id": "kyc", "label": "secure-kyc", "remote": "acme/secure-kyc" }
+  ],
+  "features": [
+    {
+      "id": "routes",
+      "name": "Payment routes",
+      "status": "live",
+      "prs": [
+        { "repo": "web", "number": 214 },
+        { "repo": "be", "number": 661 },
+        { "repo": "admin", "number": 88 },
+        { "repo": "kyc", "number": 12 }
+      ],
+      "assumes": "Nothing. This is the base layer.",
+      "exposes": "`POST /routes` returns a route with `providerId` and `settlementDelay`. Everything above reads those two fields.",
+      "chose": "One shared route table over per-provider tables. Faster to ship, and unwinding it now means a migration."
+    },
+    {
+      "id": "users",
+      "name": "Users tab",
+      "status": "live",
+      "deps": ["routes"],
+      "prs": [
+        { "repo": "web", "number": 231 },
+        { "repo": "be", "number": 690 }
+      ],
+      "assumes": "A user record carries `providerId` from payment routes.",
+      "exposes": "User list and role assignment. Roles are a string on the user row.",
+      "chose": "Roles on the user record over a permissions service. Holds until someone needs two roles at once."
+    },
+    {
+      "id": "merge",
+      "name": "Merge: routes + users",
+      "status": "live",
+      "deps": ["routes", "users"],
+      "merge": true,
+      "prs": [
+        { "repo": "web", "number": 240 },
+        { "repo": "be", "number": 701 }
+      ],
+      "assumes": "Both layers below, unchanged.",
+      "exposes": "Route visibility is gated on user role. This is the join everything above depends on.",
+      "chose": "Merged users into routes, not the reverse - users already read the route shape, so routes stayed the stable side."
+    },
+    {
+      "id": "pending",
+      "name": "Application pending actions",
+      "status": "live",
+      "deps": ["merge"],
+      "prs": [
+        { "repo": "web", "number": 258 },
+        { "repo": "be", "number": 722 },
+        { "repo": "rn", "number": 63 }
+      ],
+      "assumes": "The role-gated route list from the merge. Reads `settlementDelay` to decide what counts as pending.",
+      "exposes": "A pending-action queue the mobile app polls.",
+      "chose": "Polling over push. Cheap now, will need replacing at volume."
+    },
+    {
+      "id": "payout",
+      "name": "Payout webhooks",
+      "status": "reverted",
+      "deps": ["routes"],
+      "prs": [
+        { "repo": "be", "number": 730 },
+        { "repo": "kyc", "number": 21 }
+      ],
+      "assumes": "`settlementDelay` is a fixed number per provider.",
+      "exposes": "Nothing. Reverted five days after shipping.",
+      "chose": "Retried on provider timeout, which double-charged async providers. The assumption from the base layer does not hold for them, and this map is the only place that link is written down."
+    },
+    {
+      "id": "e2e",
+      "name": "End-to-end coverage",
+      "status": "flight",
+      "deps": ["pending"],
+      "prs": [
+        { "repo": "web", "number": 266 },
+        { "repo": "be", "number": 741 },
+        { "repo": "rn", "number": 70 },
+        { "repo": "admin", "number": 95 }
+      ],
+      "assumes": "Everything below is stable enough to assert against.",
+      "exposes": "A suite that fails loudly when any assumption above changes.",
+      "chose": "Covering the merge seam first, not the leaves."
+    },
+    {
+      "id": "notify",
+      "name": "Notification preferences",
+      "status": "planned",
+      "repos": ["web", "rn"],
+      "deps": ["pending"],
+      "assumes": "The pending-action queue keeps its current shape.",
+      "exposes": "Per-user delivery settings."
+    }
+  ]
+}

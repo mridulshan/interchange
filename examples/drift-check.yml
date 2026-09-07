@@ -1,0 +1,25 @@
+# Copy this into .github/workflows/ in the repo that holds your map.
+#
+# It fails the build when something merged without getting a row, which is
+# the only thing standing between a map and a stale drawing.
+name: interchange
+
+on:
+  schedule:
+    - cron: "0 8 * * 1" # Monday morning, before anyone trusts the map
+  workflow_dispatch:
+  pull_request:
+    paths: ["interchange.json"]
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npx interchange check --fail-on error
+        env:
+          # Needs read access to every repo the map draws a line for.
+          GITHUB_TOKEN: ${{ secrets.INTERCHANGE_TOKEN }}
