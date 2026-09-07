@@ -3,11 +3,19 @@
   "version": "0.1.0",
   "description": "A cross-repo map of what you shipped, in what order, and what each thing holds up.",
   "type": "module",
-  "bin": { "interchange": "./dist/cli.js" },
-  "files": ["dist", "README.md"],
-  "engines": { "node": ">=18" },
+  "bin": {
+    "interchange": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "prepare": "node scripts/build.mjs",
     "dev": "node scripts/build.mjs --watch",
     "serve": "npm run build && node dist/cli.js serve",
     "check": "npm run build && node dist/cli.js check",
@@ -20,5 +28,9 @@
     "esbuild": "^0.24.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mridulshan/interchange.git"
   }
 }

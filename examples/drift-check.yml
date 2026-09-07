@@ -19,7 +19,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npx interchange check --fail-on error
+      - run: npm install -g github:mridulshan/interchange
+      - run: interchange check --fail-on error
         env:
-          # Needs read access to every repo the map draws a line for.
+          # The built-in GITHUB_TOKEN only covers this repo. A cross-repo map
+          # needs a PAT or GitHub App token with read access to every repo the
+          # map draws a line for.
           GITHUB_TOKEN: ${{ secrets.INTERCHANGE_TOKEN }}

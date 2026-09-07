@@ -17,10 +17,12 @@ paper cannot do: it reads your repos and tells you what shipped without being
 drawn.
 
 ```
-npx interchange init      # start a map here
-npx interchange serve     # draw on it in a browser
-npx interchange check     # compare it against the repos
+interchange init      # start a map here
+interchange serve     # draw on it in a browser
+interchange check     # compare it against the repos
 ```
+
+Not on npm yet, so install it from this repo (see **Installing**, below).
 
 ## The map file
 
@@ -160,21 +162,72 @@ only place a link like *payout webhooks assumed a fixed `settlementDelay`, and
 that assumption came from the base layer* is ever written down. Static analysis
 finds the calls; it will not find that.
 
+## Installing
+
+Interchange is not published to npm. Install it from this repository:
+
+```
+npm install -g github:mridulshan/interchange
+```
+
+That builds on install and puts `interchange` on your path. Or from a clone,
+which is easier if you want to change it:
+
+```
+git clone https://github.com/mridulshan/interchange
+cd interchange && npm install && npm link
+```
+
+Either way, `interchange --help` should now work from any directory.
+
+## Private repos
+
+`init`, `serve` and `validate` never touch the network. `init` reads
+`git remote get-url origin` locally and writes the file — a private repo needs
+no token and no access at all:
+
+```
+cd ~/work/your-private-repo
+interchange init
+```
+
+It records the remote's *default* branch, not whatever you have checked out,
+and omits `branch` entirely when it cannot tell — the map reader then assumes
+`main`.
+
+Only `check` reaches GitHub. Give it a token with read access to **every** repo
+the map draws a line for:
+
+```
+GITHUB_TOKEN=ghp_... interchange check
+```
+
+A fine-grained personal access token needs *Contents: read* and *Pull requests:
+read* on each of them. If the token cannot see one, that line is skipped with
+the reason printed and the rest of the check still runs — it never silently
+reports a repo as clean because it could not read it.
+
+In GitHub Actions the built-in `GITHUB_TOKEN` only covers the repo the workflow
+runs in, so a cross-repo map needs a PAT or a GitHub App token in a secret.
+See `examples/drift-check.yml`.
+
 ## Try it
 
 ```
-npm install && npm run build
+git clone https://github.com/mridulshan/interchange
+cd interchange && npm install && npm run build
 node dist/cli.js serve --map examples/payments.json
 ```
 
 The example is the sketch this was built from: five repos, one merge that gates
 everything above it, and one revert that traces back to an assumption in the
-base layer.
+base layer. It points at repos that do not exist, so `check` will report every
+line as unreadable — that is the skip path doing its job.
 
 ## Development
 
 ```
-npm test          # 66 tests: graph, map format, reconciliation, server, client
+npm test          # 72 tests: graph, map format, reconciliation, server, client, git
 npm run typecheck
 npm run dev       # rebuild on change
 ```

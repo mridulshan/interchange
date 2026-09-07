@@ -10,6 +10,7 @@ import { runCheck } from "../core/check.js";
 import { validate } from "../core/graph.js";
 import { serve } from "../server/index.js";
 import { flagBool, flagList, flagString, parseArgs } from "./args.js";
+import { detectDefaultBranch, detectRemote } from "./git.js";
 import type { FailOn } from "./report.js";
 import { bold, dim, formatCheck, green, red, shouldFail, yellow } from "./report.js";
 
@@ -58,27 +59,6 @@ function locateMap(explicit: string | undefined): string {
   return found;
 }
 
-/** Best effort: the GitHub remote of the repo we are standing in. */
-async function detectRemote(cwd: string): Promise<{ id: string; remote: string } | undefined> {
-  try {
-    const { stdout } = await exec("git", ["remote", "get-url", "origin"], { cwd });
-    const m = /github\.com[:/]([^/\s]+)\/([^/\s.]+)(?:\.git)?/.exec(stdout.trim());
-    if (!m) return undefined;
-    return { id: m[2] as string, remote: `${m[1]}/${m[2]}` };
-  } catch {
-    return undefined;
-  }
-}
-
-async function detectBranch(cwd: string): Promise<string | undefined> {
-  try {
-    const { stdout } = await exec("git", ["symbolic-ref", "--short", "HEAD"], { cwd });
-    return stdout.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 async function cmdInit(args: ReturnType<typeof parseArgs>): Promise<void> {
   const cwd = process.cwd();
   const target = join(cwd, MAP_FILENAME);
@@ -87,7 +67,7 @@ async function cmdInit(args: ReturnType<typeof parseArgs>): Promise<void> {
   }
 
   const detected = await detectRemote(cwd);
-  const branch = await detectBranch(cwd);
+  const branch = await detectDefaultBranch(cwd);
   const map: InterchangeMap = {
     version: 1,
     title: "What we shipped, and what each thing holds up.",
@@ -102,6 +82,11 @@ async function cmdInit(args: ReturnType<typeof parseArgs>): Promise<void> {
   process.stdout.write(`${green("Created")} ${relative(cwd, target)}\n`);
   if (detected) {
     process.stdout.write(dim(`  Found one line: ${detected.id} (${detected.remote})\n`));
+    if (!branch) {
+      process.stdout.write(
+        dim('  Could not read the default branch, so the map assumes "main". Set "branch" if not.\n'),
+      );
+    }
     process.stdout.write(dim("  Add the other repos this work spans, then draw your first feature.\n"));
   } else {
     process.stdout.write(dim("  No GitHub remote found here. Add your repos under \"repos\".\n"));
