@@ -1,4 +1,4 @@
-import type { Feature, IgnoreRule, InterchangeMap, PrRef, RepoRef, Status } from "./types.js";
+import type { Decision, Feature, IgnoreRule, InterchangeMap, PrRef, RepoRef, Status } from "./types.js";
 import { STATUSES } from "./types.js";
 
 export class MapFormatError extends Error {}
@@ -99,6 +99,31 @@ function parseFeature(v: unknown, where: string): Feature {
   return f;
 }
 
+function parseDecision(v: unknown, where: string): Decision {
+  if (typeof v !== "object" || v === null) fail(`${where} must be an object.`);
+  const o = v as Record<string, unknown>;
+  const d: Decision = {
+    id: str(o["id"], `${where}.id`),
+    chose: str(o["chose"], `${where}.chose`),
+  };
+  for (const k of [
+    "over",
+    "because",
+    "cost",
+    "feature",
+    "supersededBy",
+    "brokeAt",
+    "madeAt",
+    "note",
+  ] as const) {
+    const val = optStr(o[k], `${where}.${k}`);
+    if (val) d[k] = val;
+  }
+  const affects = strArray(o["affects"], `${where}.affects`);
+  if (affects.length) d.affects = affects;
+  return d;
+}
+
 function parseIgnore(v: unknown, where: string): IgnoreRule {
   if (typeof v === "string") {
     const pr = parsePr(v, where);
@@ -131,10 +156,21 @@ export function normalize(raw: unknown): InterchangeMap {
     repos: ((o["repos"] as unknown[]) ?? []).map((r, i) => parseRepo(r, `repos[${i}]`)),
     features: ((o["features"] as unknown[]) ?? []).map((f, i) => parseFeature(f, `features[${i}]`)),
   };
+  const schema = optStr(o["$schema"], "$schema");
+  if (schema) map.$schema = schema;
   const title = optStr(o["title"], "title");
   const checkedAt = optStr(o["checkedAt"], "checkedAt");
   if (title) map.title = title;
   if (checkedAt) map.checkedAt = checkedAt;
+  if (o["decisions"] !== undefined && !Array.isArray(o["decisions"])) {
+    fail("decisions must be an array.");
+  }
+  if (Array.isArray(o["decisions"])) {
+    const decisions = (o["decisions"] as unknown[]).map((d, i) =>
+      parseDecision(d, `decisions[${i}]`),
+    );
+    if (decisions.length) map.decisions = decisions;
+  }
   if (Array.isArray(o["ignore"])) {
     const ignore = (o["ignore"] as unknown[]).map((r, i) => parseIgnore(r, `ignore[${i}]`));
     if (ignore.length) map.ignore = ignore;
@@ -164,6 +200,19 @@ function pick<T extends object>(src: T, keys: readonly (keyof T)[]): Record<stri
 }
 
 const REPO_KEYS = ["id", "label", "remote", "branch", "color"] as const;
+const DECISION_KEYS = [
+  "id",
+  "chose",
+  "over",
+  "because",
+  "cost",
+  "feature",
+  "affects",
+  "supersededBy",
+  "brokeAt",
+  "madeAt",
+  "note",
+] as const;
 const PR_KEYS = ["repo", "number", "title", "url", "mergedAt", "state"] as const;
 const FEATURE_KEYS = [
   "id",
@@ -186,7 +235,9 @@ const FEATURE_KEYS = [
  * A map you dread reviewing is a map that rots.
  */
 export function serialize(map: InterchangeMap): string {
-  const out: Record<string, unknown> = { version: 1 };
+  const out: Record<string, unknown> = {};
+  if (map.$schema) out["$schema"] = map.$schema;
+  out["version"] = 1;
   if (map.title) out["title"] = map.title;
   if (map.checkedAt) out["checkedAt"] = map.checkedAt;
   out["repos"] = map.repos.map((r) => pick(r, REPO_KEYS));
@@ -197,6 +248,9 @@ export function serialize(map: InterchangeMap): string {
     }
     return o;
   });
+  if (map.decisions?.length) {
+    out["decisions"] = map.decisions.map((d) => pick(d, DECISION_KEYS));
+  }
   if (map.ignore?.length) out["ignore"] = map.ignore.map((i) => pick(i, ["repo", "number", "reason"] as const));
   return JSON.stringify(out, null, 2) + "\n";
 }

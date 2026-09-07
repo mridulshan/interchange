@@ -60,6 +60,51 @@ export interface Feature {
   drift?: boolean;
 }
 
+/**
+ * A call you made, tracked over time.
+ *
+ * `Feature.chose` is the one-line version and stays the cheap path. A
+ * Decision is for the calls that outlive or cross the feature that made them:
+ * it names where it was made, what else rests on it holding, and - the part
+ * no per-feature field can express - where it later stopped holding.
+ */
+export interface Decision {
+  id: string;
+  /** What was decided. */
+  chose: string;
+  /** The alternative that lost. */
+  over?: string;
+  because?: string;
+  /** What it costs, or what you gave up taking it. */
+  cost?: string;
+  /** Feature id where the call was made. */
+  feature?: string;
+  /** Feature ids that rest on this decision continuing to hold. */
+  affects?: string[];
+  /** Decision id that replaced this one. */
+  supersededBy?: string;
+  /**
+   * Feature id where this stopped holding - the revert that proved it wrong.
+   * Setting it is what turns a standing decision into a broken one.
+   */
+  brokeAt?: string;
+  madeAt?: string;
+  note?: string;
+}
+
+/**
+ * Derived, never stored, so a decision cannot contradict itself: a record
+ * that names its successor is superseded, one that names where it broke is
+ * broken, and anything else still stands.
+ */
+export type DecisionStatus = "standing" | "superseded" | "broken";
+
+export function decisionStatus(d: Decision): DecisionStatus {
+  if (d.brokeAt) return "broken";
+  if (d.supersededBy) return "superseded";
+  return "standing";
+}
+
 /** A merged PR you have decided does not deserve a row. */
 export interface IgnoreRule {
   repo: string;
@@ -68,11 +113,14 @@ export interface IgnoreRule {
 }
 
 export interface InterchangeMap {
+  /** Kept so an editor keeps its autocomplete after Interchange writes. */
+  $schema?: string;
   version: 1;
   title?: string;
   repos: RepoRef[];
   /** Array order is ship order, top to bottom. */
   features: Feature[];
+  decisions?: Decision[];
   ignore?: IgnoreRule[];
   /** ISO timestamp of the last reconcile. */
   checkedAt?: string;

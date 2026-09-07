@@ -161,6 +161,15 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.87em;bac
   padding:1px 9px 2px;border-radius:99px
 }
 .blast .none{border-color:var(--rule);color:var(--ink-soft)}
+.calls{display:flex;flex-direction:column;gap:7px;margin-top:2px}
+.call{
+  display:block;border-left:3px solid var(--rule);padding:2px 0 2px 11px;
+  font-size:16px;color:var(--ink)
+}
+.call.bad{border-left-color:var(--drift);color:var(--drift)}
+.call b{font-family:"Barlow Condensed",sans-serif;font-weight:600;letter-spacing:.02em}
+.call .at,.call .cost{display:block;font-size:14.5px;color:var(--ink-soft)}
+.call.bad .at,.call.bad .cost{color:var(--drift);opacity:.8}
 .detail-acts{margin-top:16px;display:flex;gap:8px}
 .prlink{color:inherit;text-decoration:underline;text-decoration-color:var(--rule);text-underline-offset:2px}
 

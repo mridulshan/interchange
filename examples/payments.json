@@ -1,12 +1,30 @@
 {
+  "$schema": "../schema/interchange.schema.json",
   "version": 1,
   "title": "One run across five repos: routes, users, the merge, and what fell out of it.",
   "repos": [
-    { "id": "web", "remote": "acme/web" },
-    { "id": "be", "remote": "acme/backend" },
-    { "id": "rn", "label": "mobile", "remote": "acme/mobile" },
-    { "id": "admin", "remote": "acme/admin" },
-    { "id": "kyc", "label": "secure-kyc", "remote": "acme/secure-kyc" }
+    {
+      "id": "web",
+      "remote": "acme/web"
+    },
+    {
+      "id": "be",
+      "remote": "acme/backend"
+    },
+    {
+      "id": "rn",
+      "label": "mobile",
+      "remote": "acme/mobile"
+    },
+    {
+      "id": "admin",
+      "remote": "acme/admin"
+    },
+    {
+      "id": "kyc",
+      "label": "secure-kyc",
+      "remote": "acme/secure-kyc"
+    }
   ],
   "features": [
     {
@@ -14,10 +32,22 @@
       "name": "Payment routes",
       "status": "live",
       "prs": [
-        { "repo": "web", "number": 214 },
-        { "repo": "be", "number": 661 },
-        { "repo": "admin", "number": 88 },
-        { "repo": "kyc", "number": 12 }
+        {
+          "repo": "web",
+          "number": 214
+        },
+        {
+          "repo": "be",
+          "number": 661
+        },
+        {
+          "repo": "admin",
+          "number": 88
+        },
+        {
+          "repo": "kyc",
+          "number": 12
+        }
       ],
       "assumes": "Nothing. This is the base layer.",
       "exposes": "`POST /routes` returns a route with `providerId` and `settlementDelay`. Everything above reads those two fields.",
@@ -27,10 +57,18 @@
       "id": "users",
       "name": "Users tab",
       "status": "live",
-      "deps": ["routes"],
+      "deps": [
+        "routes"
+      ],
       "prs": [
-        { "repo": "web", "number": 231 },
-        { "repo": "be", "number": 690 }
+        {
+          "repo": "web",
+          "number": 231
+        },
+        {
+          "repo": "be",
+          "number": 690
+        }
       ],
       "assumes": "A user record carries `providerId` from payment routes.",
       "exposes": "User list and role assignment. Roles are a string on the user row.",
@@ -40,11 +78,20 @@
       "id": "merge",
       "name": "Merge: routes + users",
       "status": "live",
-      "deps": ["routes", "users"],
+      "deps": [
+        "routes",
+        "users"
+      ],
       "merge": true,
       "prs": [
-        { "repo": "web", "number": 240 },
-        { "repo": "be", "number": 701 }
+        {
+          "repo": "web",
+          "number": 240
+        },
+        {
+          "repo": "be",
+          "number": 701
+        }
       ],
       "assumes": "Both layers below, unchanged.",
       "exposes": "Route visibility is gated on user role. This is the join everything above depends on.",
@@ -54,11 +101,22 @@
       "id": "pending",
       "name": "Application pending actions",
       "status": "live",
-      "deps": ["merge"],
+      "deps": [
+        "merge"
+      ],
       "prs": [
-        { "repo": "web", "number": 258 },
-        { "repo": "be", "number": 722 },
-        { "repo": "rn", "number": 63 }
+        {
+          "repo": "web",
+          "number": 258
+        },
+        {
+          "repo": "be",
+          "number": 722
+        },
+        {
+          "repo": "rn",
+          "number": 63
+        }
       ],
       "assumes": "The role-gated route list from the merge. Reads `settlementDelay` to decide what counts as pending.",
       "exposes": "A pending-action queue the mobile app polls.",
@@ -68,10 +126,18 @@
       "id": "payout",
       "name": "Payout webhooks",
       "status": "reverted",
-      "deps": ["routes"],
+      "deps": [
+        "routes"
+      ],
       "prs": [
-        { "repo": "be", "number": 730 },
-        { "repo": "kyc", "number": 21 }
+        {
+          "repo": "be",
+          "number": 730
+        },
+        {
+          "repo": "kyc",
+          "number": 21
+        }
       ],
       "assumes": "`settlementDelay` is a fixed number per provider.",
       "exposes": "Nothing. Reverted five days after shipping.",
@@ -81,12 +147,26 @@
       "id": "e2e",
       "name": "End-to-end coverage",
       "status": "flight",
-      "deps": ["pending"],
+      "deps": [
+        "pending"
+      ],
       "prs": [
-        { "repo": "web", "number": 266 },
-        { "repo": "be", "number": 741 },
-        { "repo": "rn", "number": 70 },
-        { "repo": "admin", "number": 95 }
+        {
+          "repo": "web",
+          "number": 266
+        },
+        {
+          "repo": "be",
+          "number": 741
+        },
+        {
+          "repo": "rn",
+          "number": 70
+        },
+        {
+          "repo": "admin",
+          "number": 95
+        }
       ],
       "assumes": "Everything below is stable enough to assert against.",
       "exposes": "A suite that fails loudly when any assumption above changes.",
@@ -96,10 +176,65 @@
       "id": "notify",
       "name": "Notification preferences",
       "status": "planned",
-      "repos": ["web", "rn"],
-      "deps": ["pending"],
+      "repos": [
+        "web",
+        "rn"
+      ],
+      "deps": [
+        "pending"
+      ],
       "assumes": "The pending-action queue keeps its current shape.",
       "exposes": "Per-user delivery settings."
+    }
+  ],
+  "decisions": [
+    {
+      "id": "fixed-settlement-delay",
+      "chose": "Treat settlementDelay as a fixed number per provider",
+      "over": "reading it from the provider on every call",
+      "because": "Every consumer wanted a number it could cache.",
+      "cost": "Async providers have no fixed delay, and nothing above knows that.",
+      "feature": "routes",
+      "affects": [
+        "pending",
+        "payout"
+      ],
+      "brokeAt": "payout",
+      "note": "Payout webhooks retried on timeout and double-charged async providers. The map is the only place this traces back to the base layer."
+    },
+    {
+      "id": "shared-route-table",
+      "chose": "One shared route table",
+      "over": "per-provider tables",
+      "because": "Faster to ship in one run.",
+      "cost": "Unwinding it now means a migration.",
+      "feature": "routes",
+      "affects": [
+        "users",
+        "merge",
+        "pending"
+      ]
+    },
+    {
+      "id": "roles-on-user-record",
+      "chose": "Roles as a string on the user record",
+      "over": "a permissions service",
+      "cost": "Holds until someone needs two roles at once.",
+      "feature": "users",
+      "affects": [
+        "merge"
+      ]
+    },
+    {
+      "id": "polling-over-push",
+      "chose": "Poll for pending actions",
+      "over": "push",
+      "because": "Cheap now.",
+      "cost": "Needs replacing at volume.",
+      "feature": "pending",
+      "affects": [
+        "notify"
+      ]
     }
   ]
 }

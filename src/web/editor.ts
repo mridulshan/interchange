@@ -1,6 +1,7 @@
 import type { Feature, InterchangeMap, PrRef, Status } from "../core/types.js";
 import { STATUSES, repoColor, repoLabel } from "../core/types.js";
 import { slugify } from "../core/drift.js";
+import { parsePrRefs } from "../core/prs.js";
 import { esc } from "./draw.js";
 
 export interface EditorHandles {
@@ -16,14 +17,12 @@ const STATUS_LABEL: Record<Status, string> = {
   reverted: "reverted — shipped and taken back out",
 };
 
-/** "web#214, be#661" in, PrRef[] out. Unparseable chunks are dropped. */
+/**
+ * "web#214, be#661" in, PrRef[] out. Strict on purpose: a chunk that does not
+ * parse throws rather than vanishing, so a typo cannot quietly drop a PR.
+ */
 export function parsePrs(text: string): PrRef[] {
-  const out: PrRef[] = [];
-  for (const chunk of text.split(/[,\s]+/)) {
-    const m = /^([A-Za-z0-9._-]+)#(\d+)$/.exec(chunk.trim());
-    if (m) out.push({ repo: m[1] as string, number: Number(m[2]) });
-  }
-  return out;
+  return parsePrRefs(text.split(/[,\s]+/).filter(Boolean));
 }
 
 export function formatPrs(prs: PrRef[] | undefined): string {
@@ -138,9 +137,12 @@ export function renderEditor(
         (n) => (n as HTMLElement).dataset[attr] as string,
       );
 
-    const prs = parsePrs(val("e-prs"));
-    const rawPrs = val("e-prs");
-    if (rawPrs && !prs.length) return fail('Pull requests should look like "web#214, be#661".');
+    let prs;
+    try {
+      prs = parsePrs(val("e-prs"));
+    } catch (e) {
+      return fail((e as Error).message);
+    }
 
     const unknown = prs.map((p) => p.repo).filter((r) => !map.repos.some((x) => x.id === r));
     if (unknown.length) return fail(`No line called "${unknown[0]}". Declared: ${map.repos.map((r) => r.id).join(", ")}.`);

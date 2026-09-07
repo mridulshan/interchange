@@ -11,6 +11,10 @@ import { validate } from "../core/graph.js";
 import { serve } from "../server/index.js";
 import { flagBool, flagList, flagString, parseArgs } from "./args.js";
 import { detectDefaultBranch, detectRemote } from "./git.js";
+import { WriteRefused, addFeature, breakDecision, decide, setFeature } from "./mutate.js";
+import { featureContext, renderFeatureContext, renderMapContext } from "../core/context.js";
+import { broken, standing, summarize } from "../core/decisions.js";
+import { decisionStatus } from "../core/types.js";
 import type { FailOn } from "./report.js";
 import { bold, dim, formatCheck, green, red, shouldFail, yellow } from "./report.js";
 
@@ -35,11 +39,39 @@ ${bold("check")}
   --max-pages <n>              pages of 100 pull requests per repo (default 5)
   --api-base <url>             GitHub Enterprise API root (or set GITHUB_API_URL)
 
+${bold("writing")} - for scripts and agents; every write is validated first
+  interchange add <name>       --status --repos --deps --prs --after
+                               --assumes --exposes --chose --merge --id
+  interchange set <id>         --status --name --assumes --exposes --chose
+                               --add-pr --add-dep
+  interchange decide <text>    --over --because --cost --at --affects
+                               --supersedes --id
+  interchange broke <id>       --at <feature>   mark a decision as stopped holding
+
+${bold("reading")}
+  interchange context [id]     what to know before changing something
+  interchange decisions        the decision log  --standing --broken
+
 ${bold("common")}
   --map <path>                 use this map file instead of searching upward
+  --json                       machine-readable output, on every command above
 
 Set GITHUB_TOKEN to read private repos and raise the rate limit.
 `;
+
+/**
+ * Downstream closing the pipe is not an error. Without this, `interchange
+ * context | head` dies with a stack trace, which is exactly what a script or
+ * an agent would do first.
+ */
+function ignoreBrokenPipe(): void {
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.on("error", (e: NodeJS.ErrnoException) => {
+      if (e.code === "EPIPE") process.exit(0);
+      throw e;
+    });
+  }
+}
 
 function die(msg: string): never {
   process.stderr.write(`${red("interchange")} ${msg}\n`);
@@ -173,7 +205,169 @@ async function cmdValidate(args: ReturnType<typeof parseArgs>): Promise<void> {
   if (issues.some((i) => i.severity === "error")) process.exit(1);
 }
 
+function out(args: ReturnType<typeof parseArgs>, human: string, machine: unknown): void {
+  process.stdout.write(flagBool(args, "json") ? JSON.stringify(machine, null, 2) + "\n" : human);
+}
+
+async function withMap(
+  args: ReturnType<typeof parseArgs>,
+  fn: (map: InterchangeMap) => { map: InterchangeMap; [k: string]: unknown },
+  describe: (r: { map: InterchangeMap; [k: string]: unknown }) => [string, unknown],
+): Promise<void> {
+  const mapPath = locateMap(flagString(args, "map"));
+  const map = await loadMapFile(mapPath);
+  const result = fn(map);
+  await saveMapFile(mapPath, result.map);
+  const [human, machine] = describe(result);
+  out(args, human, machine);
+}
+
+async function cmdAdd(args: ReturnType<typeof parseArgs>): Promise<void> {
+  const name = args.positional.join(" ").trim();
+  if (!name) die('add needs a name: interchange add "Users tab" --prs web#231');
+  await withMap(
+    args,
+    (map) =>
+      addFeature(map, {
+        name,
+        ...opt(args, "id"),
+        ...opt(args, "status"),
+        ...opt(args, "after"),
+        ...opt(args, "assumes"),
+        ...opt(args, "exposes"),
+        ...opt(args, "chose"),
+        ...(flagList(args, "repos") ? { repos: flagList(args, "repos") as string[] } : {}),
+        ...(flagList(args, "deps") ? { deps: flagList(args, "deps") as string[] } : {}),
+        ...(flagList(args, "prs") ? { prs: flagList(args, "prs") as string[] } : {}),
+        ...(flagBool(args, "merge") ? { merge: true } : {}),
+      }),
+    (r) => {
+      const f = r["feature"] as { id: string; name: string; status: string };
+      return [`${green("Drew")} ${f.id} - ${f.name} [${f.status}]\n`, f];
+    },
+  );
+}
+
+async function cmdSet(args: ReturnType<typeof parseArgs>): Promise<void> {
+  const id = args.positional[0];
+  if (!id) die("set needs a feature id: interchange set pending --status live");
+  await withMap(
+    args,
+    (map) =>
+      setFeature(map, id, {
+        ...opt(args, "status"),
+        ...opt(args, "name"),
+        ...opt(args, "assumes"),
+        ...opt(args, "exposes"),
+        ...opt(args, "chose"),
+        ...(flagList(args, "add-pr") ? { addPrs: flagList(args, "add-pr") as string[] } : {}),
+        ...(flagList(args, "add-dep") ? { addDeps: flagList(args, "add-dep") as string[] } : {}),
+      }),
+    (r) => {
+      const f = r["feature"] as { id: string; name: string; status: string };
+      return [`${green("Updated")} ${f.id} - ${f.name} [${f.status}]\n`, f];
+    },
+  );
+}
+
+async function cmdDecide(args: ReturnType<typeof parseArgs>): Promise<void> {
+  const chose = args.positional.join(" ").trim();
+  if (!chose) die('decide needs the call: interchange decide "Polling over push" --at pending');
+  await withMap(
+    args,
+    (map) =>
+      decide(map, {
+        chose,
+        ...opt(args, "id"),
+        ...opt(args, "over"),
+        ...opt(args, "because"),
+        ...opt(args, "cost"),
+        ...opt(args, "at"),
+        ...opt(args, "supersedes"),
+        ...opt(args, "note"),
+        ...(flagString(args, "made-at") ? { madeAt: flagString(args, "made-at") as string } : {}),
+        ...(flagList(args, "affects") ? { affects: flagList(args, "affects") as string[] } : {}),
+      }),
+    (r) => {
+      const d = r["decision"] as { id: string; chose: string };
+      return [`${green("Recorded")} ${d.id} - ${d.chose}\n`, d];
+    },
+  );
+}
+
+async function cmdBroke(args: ReturnType<typeof parseArgs>): Promise<void> {
+  const id = args.positional[0];
+  const at = flagString(args, "at");
+  if (!id || !at) die("broke needs both: interchange broke fixed-delay --at payout");
+  await withMap(
+    args,
+    (map) => breakDecision(map, id, at, flagString(args, "note")),
+    (r) => {
+      const d = r["decision"] as { id: string; brokeAt?: string };
+      return [`${yellow("Broken")} ${d.id} - stopped holding at ${d.brokeAt}\n`, d];
+    },
+  );
+}
+
+async function cmdContext(args: ReturnType<typeof parseArgs>): Promise<void> {
+  const mapPath = locateMap(flagString(args, "map"));
+  const map = await loadMapFile(mapPath);
+  const id = args.positional[0];
+
+  if (!id) {
+    out(args, renderMapContext(map), {
+      title: map.title,
+      repos: map.repos,
+      features: map.features,
+      decisions: map.decisions ?? [],
+    });
+    return;
+  }
+
+  let ctx;
+  try {
+    ctx = featureContext(map, id);
+  } catch (e) {
+    die((e as Error).message);
+  }
+  out(args, renderFeatureContext(ctx), ctx);
+}
+
+async function cmdDecisions(args: ReturnType<typeof parseArgs>): Promise<void> {
+  const mapPath = locateMap(flagString(args, "map"));
+  const map = await loadMapFile(mapPath);
+
+  let list = map.decisions ?? [];
+  if (flagBool(args, "standing")) list = standing(map);
+  if (flagBool(args, "broken")) list = broken(map);
+
+  if (flagBool(args, "json")) {
+    process.stdout.write(JSON.stringify(list, null, 2) + "\n");
+    return;
+  }
+  if (!list.length) {
+    process.stdout.write(dim("No decisions recorded yet.\n"));
+    return;
+  }
+  for (const d of list) {
+    const st = decisionStatus(d);
+    const tag = st === "standing" ? green("standing") : st === "broken" ? red("broken") : dim("superseded");
+    process.stdout.write(`${tag}  ${bold(d.id)}\n  ${summarize(d)}\n`);
+    if (d.feature) process.stdout.write(dim(`  decided at ${d.feature}\n`));
+    if (d.cost) process.stdout.write(dim(`  cost: ${d.cost}\n`));
+    process.stdout.write("\n");
+  }
+}
+
+/** Pull an optional string flag into a spreadable object. */
+function opt(args: ReturnType<typeof parseArgs>, name: string): Record<string, string> {
+  const v = flagString(args, name);
+  const key = name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+  return v === undefined ? {} : { [key]: v };
+}
+
 async function main(): Promise<void> {
+  ignoreBrokenPipe();
   const args = parseArgs(process.argv.slice(2));
 
   if (flagBool(args, "help") || flagBool(args, "h") || !args.command) {
@@ -190,6 +384,18 @@ async function main(): Promise<void> {
       return cmdValidate(args);
     case "init":
       return cmdInit(args);
+    case "add":
+      return cmdAdd(args);
+    case "set":
+      return cmdSet(args);
+    case "decide":
+      return cmdDecide(args);
+    case "broke":
+      return cmdBroke(args);
+    case "context":
+      return cmdContext(args);
+    case "decisions":
+      return cmdDecisions(args);
     default:
       die(`Unknown command "${args.command}". Try "interchange --help".`);
   }
@@ -197,5 +403,5 @@ async function main(): Promise<void> {
 
 main().catch((e: Error) => {
   process.stderr.write(`${red("interchange")} ${e.message}\n`);
-  process.exit(2);
+  process.exit(e instanceof WriteRefused ? 1 : 2);
 });

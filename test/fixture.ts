@@ -74,3 +74,64 @@ export function sketch(): InterchangeMap {
     ],
   };
 }
+
+/**
+ * The sketch with the prose filled in and the decision that the payout revert
+ * broke, so the context and decision tests exercise a realistic map.
+ */
+export function sketchWithDecisions(): InterchangeMap {
+  const m = sketch();
+
+  const prose: Record<string, { assumes: string; exposes: string }> = {
+    routes: {
+      assumes: "Nothing. This is the base layer.",
+      exposes: "`POST /routes` returns `providerId` and `settlementDelay`.",
+    },
+    users: {
+      assumes: "A user record carries `providerId` from payment routes.",
+      exposes: "User list and role assignment.",
+    },
+    merge: {
+      assumes: "Both layers below, unchanged.",
+      exposes: "Route visibility is gated on user role.",
+    },
+    pending: {
+      assumes: "The role-gated route list. Reads `settlementDelay`.",
+      exposes: "A pending-action queue the mobile app polls.",
+    },
+  };
+  for (const f of m.features) {
+    const p = prose[f.id];
+    if (p) Object.assign(f, p);
+  }
+  m.features.find((f) => f.id === "pending")!.prs!.unshift({ repo: "web", number: 258 });
+
+  m.decisions = [
+    {
+      id: "fixed-delay",
+      chose: "Treat settlementDelay as a fixed number per provider",
+      over: "Ask the provider per call",
+      cost: "Async providers do not fit this model",
+      feature: "routes",
+      affects: ["pending", "payout"],
+    },
+    {
+      id: "shared-route-table",
+      chose: "One shared route table",
+      over: "Per-provider tables",
+      feature: "routes",
+    },
+    {
+      id: "roles-on-user",
+      chose: "Roles as a string on the user record",
+      feature: "users",
+      supersededBy: "roles-service",
+    },
+    {
+      id: "roles-service",
+      chose: "Roles behind a permissions service",
+      feature: "merge",
+    },
+  ];
+  return m;
+}

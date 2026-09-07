@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/mridulshan/interchange/schema/interchange.schema.json",
+  "title": "Interchange map",
+  "description": "A cross-repo map of what shipped, in what order, and what each thing holds up.",
+  "type": "object",
+  "required": ["version"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1 },
+    "title": { "type": "string" },
+    "checkedAt": { "type": "string", "description": "ISO timestamp of the last repo check." },
+    "repos": { "type": "array", "items": { "$ref": "#/definitions/repo" } },
+    "features": {
+      "type": "array",
+      "description": "Array order is ship order, top to bottom.",
+      "items": { "$ref": "#/definitions/feature" }
+    },
+    "decisions": { "type": "array", "items": { "$ref": "#/definitions/decision" } },
+    "ignore": { "type": "array", "items": { "$ref": "#/definitions/ignore" } }
+  },
+  "definitions": {
+    "repo": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "description": "Short handle features refer to." },
+        "label": { "type": "string" },
+        "remote": {
+          "type": "string",
+          "pattern": "^[^/\\s]+/[^/\\s]+$",
+          "description": "GitHub owner/name. Without it the line is drawn but never checked."
+        },
+        "branch": { "type": "string", "default": "main" },
+        "color": { "type": "string" }
+      }
+    },
+    "pr": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[A-Za-z0-9._-]+#\\d+$", "description": "Short form: web#214" },
+        {
+          "type": "object",
+          "required": ["repo", "number"],
+          "additionalProperties": false,
+          "properties": {
+            "repo": { "type": "string" },
+            "number": { "type": "integer", "minimum": 1 },
+            "title": { "type": "string" },
+            "url": { "type": "string" },
+            "mergedAt": { "type": "string" },
+            "state": { "enum": ["open", "merged", "closed"] }
+          }
+        }
+      ]
+    },
+    "feature": {
+      "type": "object",
+      "required": ["id", "name", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "status": {
+          "enum": ["planned", "flight", "live", "reverted"],
+          "description": "planned: drawn before it is built. flight: being built. live: shipped and standing. reverted: shipped and taken back out."
+        },
+        "repos": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Lines touched that no pull request reveals. Usually omit; it is derived from prs."
+        },
+        "deps": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Feature ids this one sits on. Must already be on the map."
+        },
+        "merge": { "type": "boolean", "description": "Draw as an interchange, not a station." },
+        "prs": { "type": "array", "items": { "$ref": "#/definitions/pr" } },
+        "assumes": { "type": "string", "description": "What it takes as given from below." },
+        "exposes": { "type": "string", "description": "What the layers above can rely on." },
+        "chose": { "type": "string", "description": "One-line decision. Use decisions[] for ones that need tracking." },
+        "note": { "type": "string" },
+        "shippedAt": { "type": "string" },
+        "drift": { "type": "boolean", "description": "Row came from a repo check, not from a person drawing it." }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "required": ["id", "chose"],
+      "additionalProperties": false,
+      "description": "Status is derived: brokeAt makes it broken, supersededBy makes it superseded, otherwise it stands.",
+      "properties": {
+        "id": { "type": "string" },
+        "chose": { "type": "string" },
+        "over": { "type": "string", "description": "The alternative that lost." },
+        "because": { "type": "string" },
+        "cost": { "type": "string", "description": "What it costs, or what you gave up." },
+        "feature": { "type": "string", "description": "Feature id where the call was made." },
+        "affects": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Feature ids that rest on this decision continuing to hold."
+        },
+        "supersededBy": { "type": "string", "description": "Decision id that replaced this one." },
+        "brokeAt": { "type": "string", "description": "Feature id where this stopped holding." },
+        "madeAt": { "type": "string" },
+        "note": { "type": "string" }
+      }
+    },
+    "ignore": {
+      "type": "object",
+      "required": ["repo", "number"],
+      "additionalProperties": false,
+      "description": "A merged pull request deliberately left off the map.",
+      "properties": {
+        "repo": { "type": "string" },
+        "number": { "type": "integer" },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}

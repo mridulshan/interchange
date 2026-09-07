@@ -1,5 +1,5 @@
 import type { Feature, InterchangeMap } from "./types.js";
-import { featureRepos } from "./types.js";
+import { decisionStatus, featureRepos } from "./types.js";
 
 export function byId(map: InterchangeMap): Map<string, Feature> {
   const m = new Map<string, Feature>();
@@ -160,6 +160,62 @@ export function validate(map: InterchangeMap): Issue[] {
         featureId: f.id,
         message: `"${f.name}" is live but references no pull request, so it can never be reconciled.`,
       });
+    }
+  }
+
+  const decisionIds = new Set<string>();
+  for (const d of map.decisions ?? []) {
+    if (decisionIds.has(d.id)) {
+      issues.push({ severity: "error", message: `Duplicate decision id "${d.id}".` });
+    }
+    decisionIds.add(d.id);
+
+    for (const [field, ref] of [
+      ["feature", d.feature],
+      ["brokeAt", d.brokeAt],
+    ] as const) {
+      if (ref && !order.has(ref)) {
+        issues.push({
+          severity: "error",
+          message: `Decision "${d.id}" names ${field} "${ref}", which is not on the map.`,
+        });
+      }
+    }
+    for (const a of d.affects ?? []) {
+      if (!order.has(a)) {
+        issues.push({
+          severity: "error",
+          message: `Decision "${d.id}" affects "${a}", which is not on the map.`,
+        });
+      }
+    }
+    // A broken decision that still holds things up is the shape that hurts:
+    // it says the ground moved and names who was standing on it.
+    if (decisionStatus(d) === "broken") {
+      const stillResting = (d.affects ?? []).filter((a) => {
+        const f = map.features.find((x) => x.id === a);
+        return f && f.status !== "reverted" && a !== d.brokeAt;
+      });
+      if (stillResting.length) {
+        issues.push({
+          severity: "warning",
+          message: `Decision "${d.id}" broke at ${d.brokeAt}, but ${stillResting.join(
+            ", ",
+          )} still rest${stillResting.length === 1 ? "s" : ""} on it.`,
+        });
+      }
+    }
+  }
+
+  for (const d of map.decisions ?? []) {
+    if (d.supersededBy && !decisionIds.has(d.supersededBy)) {
+      issues.push({
+        severity: "error",
+        message: `Decision "${d.id}" is superseded by "${d.supersededBy}", which does not exist.`,
+      });
+    }
+    if (d.supersededBy === d.id) {
+      issues.push({ severity: "error", message: `Decision "${d.id}" supersedes itself.` });
     }
   }
 

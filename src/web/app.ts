@@ -2,6 +2,9 @@ import type { Feature, InterchangeMap } from "../core/types.js";
 import { repoColor, repoLabel } from "../core/types.js";
 import type { Issue } from "../core/graph.js";
 import { downstream, laneSpans } from "../core/graph.js";
+import { featureContext } from "../core/context.js";
+import { summarize } from "../core/decisions.js";
+import type { Decision } from "../core/types.js";
 import type { Finding } from "../core/drift.js";
 import { applyFinding, ignoreFinding } from "../core/drift.js";
 import type { CheckResult } from "../core/check.js";
@@ -94,6 +97,22 @@ function fieldOr(key: string, value: string | undefined, gap: string): string {
   return `<p class="field"><span class="k">${esc(key)}</span>${body}</p>`;
 }
 
+function decisionList(list: Decision[], bad: boolean): string {
+  return (
+    '<span class="calls">' +
+    list
+      .map((d) => {
+        const where = d.feature ? ` <span class="at">decided at ${esc(d.feature)}</span>` : "";
+        const cost = d.cost ? `<span class="cost">cost: ${prose(d.cost)}</span>` : "";
+        return `<span class="call${bad ? " bad" : ""}"><b>${esc(d.id)}</b> ${prose(
+          summarize(d),
+        )}${where}${cost}</span>`;
+      })
+      .join("") +
+    "</span>"
+  );
+}
+
 function renderDetail(f: Feature, rails: string): string {
   const down = downstream(state.map, f.id);
   const blast = down.length
@@ -137,6 +156,24 @@ function renderDetail(f: Feature, rails: string): string {
       prs || '<span class="gap">None referenced.</span>'
     }</span></p>`,
   );
+  const ctx = featureContext(state.map, f.id);
+  if (ctx.mustNotBreak.length) {
+    out.push(
+      `<p class="field"><span class="k">Rests on these calls holding</span><span class="v">${decisionList(
+        ctx.mustNotBreak,
+        false,
+      )}</span></p>`,
+    );
+  }
+  if (ctx.brokenNearby.length) {
+    out.push(
+      `<p class="field warn"><span class="k">Calls here that stopped holding</span><span class="v">${decisionList(
+        ctx.brokenNearby,
+        true,
+      )}</span></p>`,
+    );
+  }
+
   if (f.note) out.push(fieldOr("Note", f.note, ""));
   out.push(
     `<div class="detail-acts"><button class="ghost" data-edit="${esc(f.id)}">Edit</button></div>`,
