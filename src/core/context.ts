@@ -123,8 +123,11 @@ export function renderFeatureContext(ctx: FeatureContext): string {
 export function renderMapContext(map: InterchangeMap): string {
   const out: string[] = [];
   out.push(`# Interchange map${map.title ? ` - ${line(map.title)}` : ""}`);
+  const n = map.features.length;
+  const r = map.repos.length;
   out.push(
-    `${map.features.length} features across ${map.repos.length} lines, in ship order (earliest first).`,
+    `${n} feature${n === 1 ? "" : "s"} across ${r} line${r === 1 ? "" : "s"}, ` +
+      "in ship order (earliest first).",
   );
   out.push(`Lines: ${map.repos.map((r) => r.label ?? r.id).join(", ") || "none"}`);
 

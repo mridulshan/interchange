@@ -45,12 +45,21 @@ function branchOf(map: InterchangeMap, repoId: string): string {
 }
 
 export function slugify(s: string, taken: Set<string> = new Set()): string {
-  const base =
-    s
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40) || "feature";
+  // Trim to whole words: an id an agent has to type back should not end
+  // mid-word, the way "...minor-units" became "...minor-uni".
+  const words = s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .split("-")
+    .filter(Boolean);
+  let base = "";
+  for (const w of words) {
+    const next = base ? `${base}-${w}` : w;
+    if (next.length > 40) break;
+    base = next;
+  }
+  if (!base) base = words[0]?.slice(0, 40) || "feature";
   if (!taken.has(base)) return base;
   let n = 2;
   while (taken.has(`${base}-${n}`)) n++;

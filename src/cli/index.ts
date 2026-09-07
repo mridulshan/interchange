@@ -9,10 +9,22 @@ import { MAP_FILENAME, findMapFile, loadMapFile, saveMapFile } from "../core/io.
 import { runCheck } from "../core/check.js";
 import { validate } from "../core/graph.js";
 import { serve } from "../server/index.js";
-import { flagBool, flagList, flagString, parseArgs } from "./args.js";
+import { UsageError, checkFlags, flagBool, flagList, flagString, parseArgs } from "./args.js";
 import { detectDefaultBranch, detectRemote } from "./git.js";
-import { WriteRefused, addFeature, breakDecision, decide, setFeature } from "./mutate.js";
+import {
+  WriteRefused,
+  addFeature,
+  addRepo,
+  breakDecision,
+  decide,
+  removeDecision,
+  removeFeature,
+  removeRepo,
+  setFeature,
+} from "./mutate.js";
 import { featureContext, renderFeatureContext, renderMapContext } from "../core/context.js";
+import { applyFinding, ignoreFinding } from "../core/drift.js";
+import { parsePrRef } from "../core/prs.js";
 import { broken, standing, summarize } from "../core/decisions.js";
 import { decisionStatus } from "../core/types.js";
 import type { FailOn } from "./report.js";
@@ -43,10 +55,16 @@ ${bold("writing")} - for scripts and agents; every write is validated first
   interchange add <name>       --status --repos --deps --prs --after
                                --assumes --exposes --chose --merge --id
   interchange set <id>         --status --name --assumes --exposes --chose
-                               --add-pr --add-dep
+                               --add-pr --add-dep --remove-pr --remove-dep
   interchange decide <text>    --over --because --cost --at --affects
                                --supersedes --id
   interchange broke <id>       --at <feature>   mark a decision as stopped holding
+  interchange accept <pr>      take a drift finding onto the map  --id --name --deps
+  interchange ignore <pr>      record that it was never a feature  --reason
+  interchange rm <id>          remove a feature or decision  --force --kind
+  interchange repo add <id>    --remote owner/name --branch --label --color
+  interchange repo list        the lines on this map
+  interchange repo rm <id>
 
 ${bold("reading")}
   interchange context [id]     what to know before changing something
@@ -119,9 +137,13 @@ async function cmdInit(args: ReturnType<typeof parseArgs>): Promise<void> {
         dim('  Could not read the default branch, so the map assumes "main". Set "branch" if not.\n'),
       );
     }
-    process.stdout.write(dim("  Add the other repos this work spans, then draw your first feature.\n"));
+    process.stdout.write(
+      dim("  Declare the other repos this work spans: interchange repo add <id> --remote owner/name\n"),
+    );
   } else {
-    process.stdout.write(dim("  No GitHub remote found here. Add your repos under \"repos\".\n"));
+    process.stdout.write(
+      dim("  No GitHub remote found here. Declare one: interchange repo add web --remote owner/name\n"),
+    );
   }
   process.stdout.write(`\n  ${bold("interchange serve")}  to draw on it\n`);
   process.stdout.write(`  ${bold("interchange check")}  to compare it against the repos\n\n`);
@@ -205,6 +227,24 @@ async function cmdValidate(args: ReturnType<typeof parseArgs>): Promise<void> {
   if (issues.some((i) => i.severity === "error")) process.exit(1);
 }
 
+/** What each command accepts, so anything else is refused rather than ignored. */
+const FLAGS: Record<string, readonly string[]> = {
+  serve: ["port", "open", "since", "only", "max-pages", "api-base"],
+  check: ["fail-on", "since", "only", "max-pages", "api-base", "no-stamp"],
+  validate: [],
+  init: ["force"],
+  add: ["id", "status", "after", "assumes", "exposes", "chose", "repos", "deps", "prs", "merge"],
+  set: ["status", "name", "assumes", "exposes", "chose", "add-pr", "add-dep", "remove-pr", "remove-dep"],
+  decide: ["id", "over", "because", "cost", "at", "supersedes", "note", "made-at", "affects"],
+  broke: ["at", "note"],
+  rm: ["force", "kind"],
+  accept: ["id", "name", "deps", "since", "max-pages", "api-base"],
+  ignore: ["reason"],
+  repo: ["remote", "branch", "label", "color"],
+  context: [],
+  decisions: ["standing", "broken"],
+};
+
 function out(args: ReturnType<typeof parseArgs>, human: string, machine: unknown): void {
   process.stdout.write(flagBool(args, "json") ? JSON.stringify(machine, null, 2) + "\n" : human);
 }
@@ -262,6 +302,8 @@ async function cmdSet(args: ReturnType<typeof parseArgs>): Promise<void> {
         ...opt(args, "chose"),
         ...(flagList(args, "add-pr") ? { addPrs: flagList(args, "add-pr") as string[] } : {}),
         ...(flagList(args, "add-dep") ? { addDeps: flagList(args, "add-dep") as string[] } : {}),
+        ...(flagList(args, "remove-pr") ? { removePrs: flagList(args, "remove-pr") as string[] } : {}),
+        ...(flagList(args, "remove-dep") ? { removeDeps: flagList(args, "remove-dep") as string[] } : {}),
       }),
     (r) => {
       const f = r["feature"] as { id: string; name: string; status: string };
@@ -309,6 +351,161 @@ async function cmdBroke(args: ReturnType<typeof parseArgs>): Promise<void> {
   );
 }
 
+/**
+ * The two buttons the browser has, as commands: take a finding onto the map,
+ * or record that it was never a feature. Without these an agent can read a
+ * drift report and do nothing about it.
+ */
+async function cmdAccept(args: ReturnType<typeof parseArgs>): Promise<void> {
+  const ref = args.positional[0];
+  if (!ref) throw new UsageError("accept needs a pull request: interchange accept be#115");
+  const pr = parsePrRef(ref);
+
+  const mapPath = locateMap(flagString(args, "map"));
+  const map = await loadMapFile(mapPath);
+
+  // Scope the check to the one line, so accepting is cheap.
+  const result = await runCheck(map, { ...checkOptions(args), only: [pr.repo] });
+  const finding = result.findings.find(
+    (f) => f.kind === "unmapped-pr" && f.pr?.repo === pr.repo && f.pr?.number === pr.number,
+  );
+  if (!finding) {
+    throw new WriteRefused(
+      `${ref} is not an unmapped pull request. Either it already has a row, or the check could not see it.`,
+    );
+  }
+
+  // Let the caller correct the guesses rather than accept them blindly.
+  const suggestion = { ...finding.suggestion! };
+  const id = flagString(args, "id");
+  const name = flagString(args, "name");
+  const deps = flagList(args, "deps");
+  if (id) suggestion.id = id;
+  if (name) suggestion.name = name;
+  if (deps) suggestion.deps = deps;
+
+  const next = applyFinding(map, { ...finding, suggestion });
+  await saveMapFile(mapPath, next);
+  out(args, `${green("Added")} ${suggestion.id} - ${suggestion.name} (from ${ref})\n`, suggestion);
+}
+
+async function cmdIgnore(args: ReturnType<typeof parseArgs>): Promise<void> {
+  const ref = args.positional[0];
+  if (!ref) throw new UsageError("ignore needs a pull request: interchange ignore be#115");
+  const pr = parsePrRef(ref);
+
+  const mapPath = locateMap(flagString(args, "map"));
+  const map = await loadMapFile(mapPath);
+
+  if ((map.ignore ?? []).some((i) => i.repo === pr.repo && i.number === pr.number)) {
+    out(args, `${dim("Already ignored")} ${ref}\n`, { repo: pr.repo, number: pr.number });
+    return;
+  }
+  const claimed = map.features.find((f) =>
+    (f.prs ?? []).some((p) => p.repo === pr.repo && p.number === pr.number),
+  );
+  if (claimed) {
+    throw new WriteRefused(
+      `${ref} already has a row ("${claimed.id}"). Remove it from that feature first.`,
+    );
+  }
+
+  const next = ignoreFinding(
+    map,
+    { kind: "unmapped-pr", severity: "error", source: pr.repo, message: "", pr },
+    flagString(args, "reason"),
+  );
+  await saveMapFile(mapPath, next);
+  out(args, `${yellow("Left off the map")} ${ref}\n`, next.ignore?.at(-1));
+}
+
+async function cmdRm(args: ReturnType<typeof parseArgs>): Promise<void> {
+  const id = args.positional[0];
+  if (!id) throw new UsageError("rm needs an id: interchange rm topup");
+  const kind = flagString(args, "kind");
+  if (kind && kind !== "feature" && kind !== "decision") {
+    throw new UsageError('--kind must be "feature" or "decision".');
+  }
+
+  const mapPath = locateMap(flagString(args, "map"));
+  const map = await loadMapFile(mapPath);
+  const isFeature = map.features.some((f) => f.id === id);
+  const isDecision = (map.decisions ?? []).some((d) => d.id === id);
+
+  if (!isFeature && !isDecision) throw new WriteRefused(`Nothing called "${id}" on this map.`);
+  if (isFeature && isDecision && !kind) {
+    throw new UsageError(
+      `"${id}" is both a feature and a decision. Pass --kind feature or --kind decision.`,
+    );
+  }
+  const target = kind ?? (isFeature ? "feature" : "decision");
+
+  if (target === "decision") {
+    const r = removeDecision(map, id);
+    await saveMapFile(mapPath, r.map);
+    out(args, `${yellow("Removed")} decision ${r.decision.id}\n`, r.decision);
+    return;
+  }
+
+  const r = removeFeature(map, id, flagBool(args, "force"));
+  await saveMapFile(mapPath, r.map);
+  const note = r.detached.length ? ` (detached ${r.detached.join(", ")})` : "";
+  out(args, `${yellow("Removed")} ${r.feature.id} - ${r.feature.name}${note}\n`, {
+    feature: r.feature,
+    detached: r.detached,
+  });
+}
+
+async function cmdRepo(args: ReturnType<typeof parseArgs>): Promise<void> {
+  const [action, id] = args.positional;
+  const mapPath = locateMap(flagString(args, "map"));
+  const map = await loadMapFile(mapPath);
+
+  if (!action || action === "list") {
+    if (flagBool(args, "json")) {
+      process.stdout.write(JSON.stringify(map.repos, null, 2) + "\n");
+      return;
+    }
+    if (!map.repos.length) {
+      process.stdout.write(dim("No lines declared yet. interchange repo add web --remote acme/web\n"));
+      return;
+    }
+    for (const r of map.repos) {
+      const remote = r.remote ? `${r.remote}@${r.branch ?? "main"}` : dim("no remote - never checked");
+      process.stdout.write(`${bold(r.id)}${r.label && r.label !== r.id ? ` (${r.label})` : ""}  ${remote}\n`);
+    }
+    return;
+  }
+
+  if (!id) die(`repo ${action} needs a line id: interchange repo ${action} be`);
+
+  if (action === "add") {
+    const r = addRepo(map, {
+      id,
+      ...opt(args, "remote"),
+      ...opt(args, "branch"),
+      ...opt(args, "label"),
+      ...opt(args, "color"),
+    });
+    await saveMapFile(mapPath, r.map);
+    out(
+      args,
+      `${green("Declared")} ${r.repo.id}${r.repo.remote ? ` (${r.repo.remote})` : ""}\n`,
+      r.repo,
+    );
+    return;
+  }
+
+  if (action === "rm" || action === "remove") {
+    const r = removeRepo(map, id);
+    await saveMapFile(mapPath, r.map);
+    out(args, `${yellow("Removed")} line ${r.repo.id}\n`, r.repo);
+    return;
+  }
+
+  die(`Unknown repo action "${action}". Try: add, rm, list.`);
+}
+
 async function cmdContext(args: ReturnType<typeof parseArgs>): Promise<void> {
   const mapPath = locateMap(flagString(args, "map"));
   const map = await loadMapFile(mapPath);
@@ -328,7 +525,8 @@ async function cmdContext(args: ReturnType<typeof parseArgs>): Promise<void> {
   try {
     ctx = featureContext(map, id);
   } catch (e) {
-    die((e as Error).message);
+    // The map said no, which is not the same as being called wrong.
+    throw new WriteRefused((e as Error).message);
   }
   out(args, renderFeatureContext(ctx), ctx);
 }
@@ -375,6 +573,9 @@ async function main(): Promise<void> {
     return;
   }
 
+  const allowed = FLAGS[args.command];
+  if (allowed) checkFlags(args, allowed);
+
   switch (args.command) {
     case "serve":
       return cmdServe(args);
@@ -396,6 +597,14 @@ async function main(): Promise<void> {
       return cmdContext(args);
     case "decisions":
       return cmdDecisions(args);
+    case "rm":
+      return cmdRm(args);
+    case "repo":
+      return cmdRepo(args);
+    case "accept":
+      return cmdAccept(args);
+    case "ignore":
+      return cmdIgnore(args);
     default:
       die(`Unknown command "${args.command}". Try "interchange --help".`);
   }
@@ -403,5 +612,6 @@ async function main(): Promise<void> {
 
 main().catch((e: Error) => {
   process.stderr.write(`${red("interchange")} ${e.message}\n`);
-  process.exit(e instanceof WriteRefused ? 1 : 2);
+  // 1: the map said no. 2: you called it wrong.
+  process.exit(e instanceof UsageError ? 2 : e instanceof WriteRefused ? 1 : 2);
 });

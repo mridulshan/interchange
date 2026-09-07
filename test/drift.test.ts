@@ -183,3 +183,16 @@ describe("staying honest about a partial window", () => {
     expect(f?.featureId).toBe("e2e");
   });
 });
+
+describe("ids derived from text", () => {
+  it("cuts at a word boundary rather than mid-word", () => {
+    // "...minor-uni" was the old behaviour and reads like a typo.
+    expect(slugify("Store balance as an integer of minor units")).toBe(
+      "store-balance-as-an-integer-of-minor",
+    );
+  });
+
+  it("keeps a long single word usable rather than producing nothing", () => {
+    expect(slugify("a".repeat(60))).toHaveLength(40);
+  });
+});

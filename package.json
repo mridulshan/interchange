@@ -19,6 +19,7 @@
     "dev": "node scripts/build.mjs --watch",
     "serve": "npm run build && node dist/cli.js serve",
     "check": "npm run build && node dist/cli.js check",
+    "pretest": "node scripts/build.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

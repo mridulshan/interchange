@@ -29,6 +29,29 @@ If your change breaks a standing decision, that is allowed — say so, and recor
 it (see below). What is not allowed is breaking it without a record, because
 the next agent reads this file and not your reasoning.
 
+## Exit codes
+
+Check them. They are the difference between a write that happened and one that
+did not.
+
+| code | meaning |
+| --- | --- |
+| 0 | it worked |
+| 1 | the map said no — refused, not found, or drift was found |
+| 2 | you called it wrong — unknown command, unknown flag, missing argument |
+
+An unknown flag is **refused, not ignored**: `set x --statuss live` exits 2 and
+changes nothing rather than reporting success.
+
+## Setting up a line
+
+A feature cannot touch a repo that is not declared. Declare it first:
+
+```
+interchange repo add be --remote acme/backend
+interchange repo list
+```
+
 ## After you ship
 
 Every write is validated before it saves. A write that would break the map is
@@ -55,6 +78,39 @@ interchange broke fixed-delay --at payout
 
 Ids are derived from the text when you do not pass `--id`. Every command
 accepts `--json` and prints what it wrote.
+
+## Correcting a mistake
+
+Nothing is append-only. If you get something wrong, fix it:
+
+```
+interchange set wallets --remove-pr be#999      # wrong pull request
+interchange set wallets --remove-dep routes     # wrong dependency
+interchange rm topup                            # remove a feature
+interchange rm topup --force                    # ...and detach whatever sat on it
+interchange rm some-decision-id                 # remove a decision
+interchange repo rm rn                          # remove an unused line
+```
+
+`rm` refuses while other work sits on the feature, and tells you what. With
+`--force` it removes the feature and strips the dependency from everything that
+was standing on it, so the map never keeps a pointer to something gone.
+
+## Acting on a drift check
+
+`interchange check --json` gives you findings. A finding of kind `unmapped-pr`
+carries a `suggestion` — a proposed row, including a guess at what it sits on.
+Do not hand-translate it; act on it directly:
+
+```
+interchange accept be#115                        # take the suggestion as-is
+interchange accept be#115 --deps wallets --id audit-log   # or correct it first
+interchange ignore be#120 --reason "dependency bump"      # never was a feature
+```
+
+`ignore` records the pull request under `ignore` so the same finding is not
+raised again. Use it for dependency bumps, reverts of your own work, and
+release chores — not to silence work that genuinely deserves a row.
 
 ## The rules the map enforces
 

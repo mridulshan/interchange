@@ -203,16 +203,31 @@ context window.
 After shipping:
 
 ```
+interchange repo add be --remote acme/backend
 interchange add "Offline queue" --prs rn#78 --deps pending
 interchange set e2e --status live --add-pr admin#95
 interchange decide "Poll over push" --at pending --cost "Needs replacing at volume"
 interchange broke fixed-settlement-delay --at payout
 ```
 
-Every write is validated against the whole map first. **A write that would
-introduce an error is refused with exit 1 and the file is left untouched** — so
-attempting one is safe, and the error says what was wrong. Errors that were
-already in the map do not block unrelated writes.
+And acting on a drift check without hand-translating it:
+
+```
+interchange accept be#115                            # take the proposed row
+interchange ignore be#120 --reason "dependency bump" # never was a feature
+```
+
+Three things make this safe to hand to an agent:
+
+- **Unknown flags are refused, not ignored.** `set x --statuss live` exits 2 and
+  changes nothing. Silently accepting a typo and reporting success is the worst
+  thing a tool can do to a caller that cannot read its own output critically.
+- **Every write is validated against the whole map first.** One that would
+  introduce an error is refused with exit 1 and the file is left untouched, so
+  attempting a write is safe. Errors already in the map do not block unrelated
+  writes.
+- **Exit codes mean something.** 0 worked, 1 the map said no, 2 you called it
+  wrong.
 
 Every command takes `--json`. Output pipes cleanly.
 
@@ -223,6 +238,10 @@ interchange serve      --port <n>  --open
 interchange check      --json  --fail-on <none|warning|error>  --since <date>
                        --only <repo,repo>  --max-pages <n>  --api-base <url>
 interchange context [id]          what to know before changing something
+interchange accept <pr>           take a drift finding onto the map
+interchange ignore <pr>           record that it was never a feature  --reason
+interchange rm <id>               remove a feature or decision  --force --kind
+interchange repo add|rm|list      declare the lines the map draws
 interchange decisions             --standing  --broken
 interchange add <name>            --status --repos --deps --prs --after
                                   --assumes --exposes --chose --merge --id
@@ -327,8 +346,8 @@ line as unreadable — that is the skip path doing its job.
 ## Development
 
 ```
-npm test          # 117 tests: graph, decisions, context, map format,
-                  # reconciliation, writes, server, client, git
+npm test          # 161 tests: graph, decisions, context, map format,
+                  # reconciliation, writes, args, server, client, git
 npm run typecheck
 npm run dev       # rebuild on change
 ```
